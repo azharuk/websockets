@@ -98,7 +98,7 @@ class WebSocketCommonProtocol(asyncio.StreamReaderProtocol):
     The ``write_limit`` argument sets the high-water limit of the buffer for
     outgoing bytes. The low-water limit is a quarter of the high-water limit.
     The default value is 64kB, equal to asyncio's default (based on the
-    current implementation of ``_FlowControlMixin``).
+    current implementation of ``FlowControlMixin``).
 
     As soon as the HTTP request and response in the opening handshake are
     processed, the request path is available in the :attr:`path` attribute,
@@ -141,7 +141,7 @@ class WebSocketCommonProtocol(asyncio.StreamReaderProtocol):
         self.write_limit = write_limit
 
         # Store a reference to loop to avoid relying on self._loop, a private
-        # attribute of StreamReaderProtocol, inherited from _FlowControlMixin.
+        # attribute of StreamReaderProtocol, inherited from FlowControlMixin.
         if loop is None:
             loop = asyncio.get_event_loop()
         self.loop = loop
@@ -170,7 +170,8 @@ class WebSocketCommonProtocol(asyncio.StreamReaderProtocol):
         self.close_reason = ''
 
         # Futures tracking steps in the connection's lifecycle.
-        # Set to True when the opening handshake has completed properly.
+        # Set to True when the opening handshake has completed properly and to
+        # False when it aborts.
         self.opening_handshake = asyncio.Future(loop=loop)
         # Set to True when the closing handshake has completed properly and to
         # False when the connection terminates abnormally.
@@ -441,7 +442,14 @@ class WebSocketCommonProtocol(asyncio.StreamReaderProtocol):
 
     @asyncio.coroutine
     def run(self):
-        # This coroutine guarantees that the connection is closed at exit.
+        """
+        Read incoming frames and put messages in a queue.
+
+        This coroutine runs in a task while the connection is alive.
+
+        It guarantees that the connection is closed before it terminates.
+
+        """
         yield from self.opening_handshake
         while not self.closing_handshake.done():
             try:
@@ -466,7 +474,14 @@ class WebSocketCommonProtocol(asyncio.StreamReaderProtocol):
 
     @asyncio.coroutine
     def read_message(self):
-        # Reassemble fragmented messages.
+        """
+        Read a single message from the connection.
+
+        Re-assembles data frames if the message is fragmented.
+
+        Return ``None`` if a close frame is encountered before any data frame.
+
+        """
         frame = yield from self.read_data_frame(max_size=self.max_size)
         if frame is None:
             return
@@ -519,7 +534,14 @@ class WebSocketCommonProtocol(asyncio.StreamReaderProtocol):
 
     @asyncio.coroutine
     def read_data_frame(self, max_size):
-        # Deal with control frames automatically and return next data frame.
+        """
+        Read a single data frame from the connection.
+
+        Process control frames received before the next data frame.
+
+        Return ``None`` if a close frame is encountered before any data frame.
+
+        """
         # 6.2. Receiving Data
         while True:
             frame = yield from self.read_frame(max_size)
@@ -555,6 +577,10 @@ class WebSocketCommonProtocol(asyncio.StreamReaderProtocol):
 
     @asyncio.coroutine
     def read_frame(self, max_size):
+        """
+        Read a single frame from the connection.
+
+        """
         frame = yield from Frame.read(
             self.reader.readexactly,
             mask=not self.is_client,
